@@ -18,9 +18,16 @@ def lambda_handler(event, context):
 
     cursor = connection.cursor(cursor_factory=RealDictCursor)
 
-    client = boto3.client("datasync", region_name=event["region_name"])
+    secrets_client = boto3.client("secrets")
+    polling_function_arn = json.loads(
+        secrets_client.get_secret_value(
+            SecretId=os.environ.get("SECRETS"),
+        ).get("SecretString")
+    ).get("POLLING_FUNCTION_ARN")
 
-    status = client.describe_task_execution(
+    data_sync_client = \
+        boto3.client("datasync", region_name=event["region_name"])
+    status = data_sync_client.describe_task_execution(
         TaskExecutionArn=event["task_execution_arn"],
     ).get("Status")
 
@@ -64,6 +71,6 @@ def lambda_handler(event, context):
 
     print(f"""{event["id"]}-> Performing recursive invocation""")
     boto3.client("lambda").invoke_async(
-        FunctionName=os.environ.get("POLLING_FUNCTION_ARN"),
+        FunctionName=polling_function_arn,
         InvokeArgs=payload_bytes,
     )

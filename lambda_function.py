@@ -6,6 +6,36 @@ import boto3
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+import logging
+from datetime import datetime
+from pythonjsonlogger import jsonlogger
+
+
+class CustomJsonFormatter(jsonlogger.JsonFormatter):
+    def add_fields(self, log_record, record, message_dict):
+        super(CustomJsonFormatter, self).add_fields(
+            log_record,
+            record,
+            message_dict
+        )
+        if not log_record.get('timestamp'):
+            now = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            log_record['time'] = now
+        if log_record.get('level'):
+            log_record['level'] = log_record['level'].lower()
+        else:
+            log_record['level'] = record.levelname.lower()
+        log_record['source'] = "DataTransferUpdate"
+
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+formatter = CustomJsonFormatter('%(level)s %(msg)s %(time)s %(source)s')
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(formatter)
+logger.addHandler(stream_handler)
+
 
 def lambda_handler(event, context):
     connection = psycopg2.connect(
@@ -17,6 +47,10 @@ def lambda_handler(event, context):
     )
 
     cursor = connection.cursor(cursor_factory=RealDictCursor)
+
+    select_query = "SELECT * FROM emr_job_details WHERE id=%s"
+    cursor.execute(select_query, (event["id"], ))
+    data = cursor.fetchone()
 
     secrets_client = boto3.client("secretsmanager")
     polling_function_arn = json.loads(
@@ -39,15 +73,27 @@ def lambda_handler(event, context):
         (status, event["id"])
     )
 
-    print(
-        f"""{event["id"]}-> Polling jobstatus: {status}"""
-    )
+    extra_log_info = {
+        "clientIp": data.get("client_ip"),
+        "destinationBucket": data.get("destination"),
+        "id": data.get("id"),
+        "jti": data.get("jti"),
+        "query": data.get("query"),
+        "region": data.get("cross_bucket_region"),
+        "skyflowRequestId": data.get("requestId"),
+    }
+
+    logger.info(
+        f"Polling jobstatus: {status}",
+        extra=extra_log_info,
+        )
     if status in ("SUCCESS", "ERROR"):
         status = status if status != "ERROR" else "FAILED"
 
-        print(
-            f"""{event["id"]}-> Updating jobstatus: {status}"""
-        )
+        logger.info(
+            f"Updating jobstatus: {status}",
+            extra=extra_log_info,
+            )
         update_query = "UPDATE emr_job_details SET jobstatus=%s WHERE id=%s"
         cursor.execute(
             update_query,
@@ -59,7 +105,10 @@ def lambda_handler(event, context):
 
     sleep_interval = int(os.environ.get("POLLING_INTERVAL"))
 
-    print(f""""{event["id"]}-> Sleeping for {sleep_interval} seconds""")
+    logger.info(
+        f"Sleeping for {sleep_interval} seconds",
+        extra=extra_log_info,
+        )
     sleep(sleep_interval)
 
     payload = {
@@ -69,7 +118,11 @@ def lambda_handler(event, context):
     }
     payload_bytes = json.dumps(payload).encode('utf-8')
 
-    print(f"""{event["id"]}-> Performing recursive invocation""")
+    logger.info(
+        f"Performing recursive invocation",
+        extra=extra_log_info,
+        )
+
     boto3.client("lambda").invoke_async(
         FunctionName=polling_function_arn,
         InvokeArgs=payload_bytes,

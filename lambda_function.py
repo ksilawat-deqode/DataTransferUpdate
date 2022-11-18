@@ -35,6 +35,7 @@ formatter = CustomJsonFormatter('%(level)s %(msg)s %(time)s %(source)s')
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(formatter)
 logger.addHandler(stream_handler)
+logger.propagate = False
 
 
 def lambda_handler(event, context):
@@ -76,17 +77,17 @@ def lambda_handler(event, context):
     extra_log_info = {
         "clientIp": data.get("client_ip"),
         "destinationBucket": data.get("destination"),
-        "id": data.get("id"),
+        "queryId": data.get("id"),
         "jti": data.get("jti"),
         "query": data.get("query"),
         "region": data.get("cross_bucket_region"),
-        "skyflowRequestId": data.get("requestId"),
+        "skyflowRequestId": data.get("requestid"),
     }
 
     logger.info(
         f"Polling jobstatus: {status}",
         extra=extra_log_info,
-        )
+    )
     if status in ("SUCCESS", "ERROR"):
         status = status if status != "ERROR" else "FAILED"
 
@@ -108,7 +109,7 @@ def lambda_handler(event, context):
     logger.info(
         f"Sleeping for {sleep_interval} seconds",
         extra=extra_log_info,
-        )
+    )
     sleep(sleep_interval)
 
     payload = {
@@ -121,7 +122,7 @@ def lambda_handler(event, context):
     logger.info(
         f"Performing recursive invocation",
         extra=extra_log_info,
-        )
+    )
 
     boto3.client("lambda").invoke_async(
         FunctionName=polling_function_arn,
